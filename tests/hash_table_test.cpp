@@ -55,6 +55,24 @@ TEST(HashTableTest, EraseMissingKeyReturnsFalse)
     EXPECT_FALSE(table.erase("missing"));
 }
 
-// NOTE: no rehash/resize test yet — HashTable doesn't implement automatic
-// resizing on load factor yet (see docs/01-hash-table.md). Add a test here
-// once size()/load_factor()/rehash are implemented.
+TEST(HashTableTest, RehashPreservesAllElements)
+{
+    HashTable table;
+    const int kCount = 1000;
+
+    for (int i = 0; i < kCount; ++i)
+    {
+        table.put("key" + std::to_string(i), "val" + std::to_string(i));
+    }
+
+    EXPECT_EQ(table.size(), static_cast<std::size_t>(kCount));
+    EXPECT_LE(table.load_factor(), 0.75);
+
+    std::string value;
+    for (int i = 0; i < kCount; ++i)
+    {
+        ASSERT_TRUE(table.get("key" + std::to_string(i), value))
+            << "missing key" << i << " after rehash";
+        EXPECT_EQ(value, "val" + std::to_string(i));
+    }
+}
