@@ -63,11 +63,77 @@ Be able to answer these (write it out; if you're fumbling, it means you haven't 
 - Why does a hash table give fast lookups but poor support for range queries (e.g. "give me every
   key from A to M")? This is exactly why LSM Trees / B-Trees exist — you'll see this clearly in
   the next stage.
+  Hash table tra cứu nhanh (O(1)) vì hash function ánh xạ trực tiếp key → vị trí, không cần so sánh với các key khác. Nhưng chính hash function đó lại cố tình xáo trộn thứ tự của key để tránh va chạm (collision) — nên 2 key gần nhau về giá trị (như "Apple" và "Apricot") có thể rơi vào 2 bucket cách xa nhau bất kỳ. Vì không còn giữ được thứ tự, hash table không thể "nhảy" tới đúng khoảng cần tìm — phải duyệt qua toàn bộ (O(n)) để lọc ra key nằm trong range. Ngược lại, B-Tree/LSM Tree giữ nguyên thứ tự sắp xếp của key trong cấu trúc của nó, nên có thể trả lời range query hiệu quả (O(log n) để tìm điểm bắt đầu, rồi duyệt tuần tự).
 - If `bucket_count` is a prime number instead of a power of two, what's the benefit/cost? (relate
   this to distribution quality when the hash function isn't perfectly random)
+  Câu hỏi này đi vào chi tiết khá sâu về cách chọn số lượng bucket — một chủ đề kinh điển khi thiết kế hash table. Để mình phân tích rõ.
+
+## Vấn đề gốc: `%` với số bucket
+
+Nhớ lại công thức tính index:
+```cpp
+index = hash_value % buckets_.size();
+```
+
+Kết quả của `%` phụ thuộc rất nhiều vào việc `buckets_.size()` là **số nguyên tố** hay **lũy thừa của 2** (power of two).
+
+## Trường hợp: `bucket_count` là lũy thừa của 2 (ví dụ 16, 32, 64...)
+
+Khi số chia là lũy thừa của 2, phép `% 2^k` **tương đương về mặt toán học** với việc **chỉ lấy k bit thấp nhất** của `hash_value`:
+
+```
+hash_value % 16   ==   lấy 4 bit thấp nhất của hash_value
+```
+
+**Vấn đề nảy sinh:** nếu hàm hash **không hoàn toàn ngẫu nhiên** ở các bit thấp (nhiều hash function thực tế có xu hướng "yếu" — kém ngẫu nhiên — ở vài bit thấp nhất, dù các bit cao vẫn phân bố tốt), thì việc chỉ dựa vào k bit thấp sẽ khiến **nhiều key khác nhau vô tình rơi vào cùng 1 bucket** — dù hash value của chúng nhìn tổng thể khá khác nhau.
+
+Ví dụ đơn giản hóa: giả sử hash function có pattern nào đó khiến bit thấp nhất luôn có xu hướng lặp lại theo 1 quy luật nhẹ (không hoàn toàn ngẫu nhiên) — thì khi `% 16` (chỉ nhìn 4 bit thấp), bạn "khuếch đại" điểm yếu đó lên, khiến phân bố vào bucket bị lệch (skewed), nhiều bucket trống trong khi vài bucket khác quá tải.
+
+## Trường hợp: `bucket_count` là số nguyên tố (ví dụ 17, 31, 61...)
+
+Khi số chia là **số nguyên tố**, phép `%` sẽ **buộc phải "trộn" toàn bộ các bit** của `hash_value` để tính ra kết quả — không có cách nào rút gọn phép tính `% p` (p là số nguyên tố) thành việc chỉ nhìn 1 nhóm bit cụ thể như trường hợp lũy thừa của 2.
+
+→ **Lợi ích:** vì số nguyên tố không "cộng hưởng" (không chia hết) với bất kỳ pattern chu kỳ nào ẩn trong hash value theo lũy thừa 2, nên `% p` có xu hướng **phân bố đều hơn** vào các bucket — **ngay cả khi hàm hash không hoàn hảo** (không hoàn toàn ngẫu nhiên).
+
+Đây chính là lý do nhiều implementation hash table cổ điển (ví dụ `java.util.Hashtable` bản cũ, hoặc nhiều sách giáo trình) khuyên dùng **số nguyên tố** làm `bucket_count`.
+
+## Vậy tại sao nhiều hash table hiện đại (như `std::unordered_map`, hoặc nhiều implementation khác) lại dùng **lũy thừa của 2**?
+
+Vì lũy thừa của 2 có **lợi ích về tốc độ**:
+
+```cpp
+hash_value % 16        // phép chia (%), có thể chậm hơn 1 chút trên 1 số CPU
+hash_value & 15         // dùng bitwise AND (&) — thường NHANH HƠN đáng kể so với %
+```
+
+Khi `bucket_count` là lũy thừa của 2, phép `% N` **có thể thay bằng `& (N-1)`** — phép AND ở mức bit, vốn cực nhanh trên phần cứng (thường chỉ 1 cycle CPU, trong khi `%` với số bất kỳ có thể tốn nhiều cycle hơn, tùy CPU).
+
+→ Nhưng đánh đổi lại: nếu hash function không đủ tốt (yếu ở bit thấp), bucket_count dạng lũy thừa 2 dễ gây phân bố lệch hơn — như đã giải thích ở trên.
+
+## Cách các hash table hiện đại giải quyết mâu thuẫn này
+
+Nhiều implementation (bao gồm `std::unordered_map` phổ biến) chọn **dùng lũy thừa của 2** (để tận dụng tốc độ `&`), nhưng **bù lại bằng cách "trộn" (mix) thêm hash value trước khi lấy modulo** — ví dụ dùng kỹ thuật gọi là "hash finalizer" hoặc "avalanche mixing" (như trong MurmurHash, xxHash...) để đảm bảo **mọi bit** của hash value đều tốt/ngẫu nhiên, không chỉ bit thấp — từ đó xóa bỏ nhược điểm của phương pháp lũy thừa 2 mà vẫn giữ được tốc độ.
+
+## Tóm tắt (trả lời ngắn gọn)
+
+| | Số nguyên tố | Lũy thừa của 2 |
+|---|---|---|
+| **Lợi ích** | Phân bố đều hơn, "bù đắp" cho hash function không hoàn hảo (vì buộc trộn toàn bộ bit) | Tốc độ nhanh hơn — `%` có thể thay bằng `&` (bitwise AND) |
+| **Chi phí** | Phép `%` với số nguyên tố bất kỳ thường **chậm hơn** phép AND | Nếu hash function yếu ở bit thấp → dễ bị phân bố lệch, nhiều va chạm hơn dự kiến |
+| **Dùng khi nào** | Khi không tin tưởng hoàn toàn vào chất lượng hash function, ưu tiên phân bố đều | Khi hash function đã được thiết kế tốt (trộn đều mọi bit) hoặc có bước "mix" bổ sung, ưu tiên tốc độ |
 - Resizing (rehashing) blocks all operations while data is being moved — for a real KV store
   serving live traffic, how serious is this? (this is a preview of the "incremental rehashing"
   problem that Redis actually solves)
+  Trong bài tập HashTable đơn giản của bạn, resize gây "dừng mọi thứ" không sao cả vì bạn không phục vụ nhiều client đồng thời. Nhưng khi đây là hạ tầng production thực tế (như Redis), 1 lần resize chặn toàn bộ hệ thống trong vài trăm mili giây tới vài giây có thể gây hậu quả nghiêm trọng (timeout hàng loạt, cascading failure) — đây chính là động lực khiến Redis phát triển kỹ thuật incremental rehashing: rải nhỏ công việc resize ra theo thời gian, thay vì làm 1 lần rồi chặn hết mọi request trong lúc đó.
+  fact thêm
+  Đây chính là vấn đề Redis giải quyết: Incremental Rehashing
+
+Thay vì resize "một phát ăn ngay" (di chuyển hết trong 1 lần, chặn mọi thứ), Redis dùng kỹ thuật gọi là incremental rehashing — ý tưởng cốt lõi:
+
+Giữ 2 bảng hash cùng lúc: bảng cũ (old_table) và bảng mới (new_table, đã tăng kích thước).
+Thay vì di chuyển hết ngay, Redis di chuyển từng bucket nhỏ một, rải ra qua nhiều lần gọi lệnh (mỗi khi có 1 lệnh GET/SET đến, Redis "tiện tay" di chuyển thêm 1 chút dữ liệu từ bảng cũ sang bảng mới trước khi xử lý lệnh đó).
+Trong lúc này, cả 2 bảng đều được kiểm tra khi tra cứu (tìm ở new_table trước, không thấy thì tìm ở old_table) — nên hệ thống vẫn phục vụ được request bình thường, không có khoảng "đứng hình" nào cả — chỉ là quá trình resize kéo dài hơn 1 chút (dàn trải theo thời gian) để đổi lấy việc không bao giờ chặn traffic.
+
 
 ## Project setup (do it yourself)
 No starter code here — decide the directory layout, build system (CMake or just calling `g++`
@@ -76,3 +142,9 @@ test/demo code so it's easier to reuse once you build the layers on top of it, b
 
 When you're done, you can ask Claude to review your code (not write it for you) or ask if you get
 stuck on a specific concept.
+# thêm
+
+Load factor	Tốc độ	Bộ nhớ
+Rất thấp (0.1)	Cực nhanh (hầu như 0 collision)	Lãng phí — cấp phát rất nhiều bucket trống, không dùng tới
+~0.7 - 1.0	Nhanh (chấp nhận vài collision nhỏ)	Cân bằng — không lãng phí quá nhiều
+Quá cao (>2-3)	Chậm dần (nhiều collision)	Tiết kiệm bộ nhớ nhưng đánh đổi tốc độ

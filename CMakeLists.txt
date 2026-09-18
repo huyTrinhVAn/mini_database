@@ -28,5 +28,9 @@ enable_testing()
 add_executable(hash_table_test tests/hash_table_test.cpp)
 target_link_libraries(hash_table_test GTest::gtest_main)
 
+add_executable(skip_list_test tests/skip_list_test.cpp src/skip_list.cpp)
+target_link_libraries(skip_list_test GTest::gtest_main)
+
 include(GoogleTest)
 gtest_discover_tests(hash_table_test)
+gtest_discover_tests(skip_list_test)

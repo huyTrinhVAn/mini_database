@@ -12,8 +12,13 @@ Working principles:
 - Strict ordering isn't mandatory, but it's recommended since later stages build on earlier ones.
 
 ## Stage 1 — Core Data Structures (in progress)
-- [ ] 1.1 Hash Table (separate chaining) — see `01-hash-table.md`
-- [ ] 1.2 Skip List or B-Tree (ordered data)
+- [x] 1.1 Hash Table (separate chaining) — see `01-hash-table.md`
+- [ ] 1.2a Skip List (ordered data) — see `02-skip-list.md`. Doing this first: simpler to
+      implement correctly than a B-Tree, and it's what Stage 1.4's memtable will reuse directly
+      (LevelDB/RocksDB use a skip list for exactly this reason).
+- [ ] 1.2b B-Tree (optional deep-dive, after 1.2a) — classic on-disk indexing structure
+      (MySQL/Postgres), noticeably harder to implement correctly (node split/merge/borrow on
+      insert and delete) but high-value for systems/database interview prep.
 - [ ] 1.3 Write-Ahead Log (WAL) for durability
 - [ ] 1.4 LSM Tree (combining memtable + WAL + on-disk SSTables)
 
